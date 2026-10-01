@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instant Web Signer ($0 Cost)</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS for Free P2P Connection -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <!-- QRCode Generator -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- PDF-Lib to modify PDFs -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4 select-none">
+
+    <!-- VIEW 1: PC HOST SCREEN -->
+    <div id="host-view" class="w-full max-w-xl bg-gray-800 p-6 rounded-2xl shadow-xl text-center">
+        <h1 class="text-2xl font-bold mb-2">PC PDF Signer</h1>
+        <p class="text-gray-400 text-sm mb-6">Scan the QR code with your phone to open your mobile signing pad.</p>
+        
+        <div id="qrcode" class="bg-white p-4 inline-block rounded-xl mb-4"></div>
+        <p id="status" class="text-yellow-400 text-sm font-medium">Initializing connection...</p>
+        
+        <div id="actions" class="mt-6 hidden">
+            <input type="file" id="pdf-upload" accept="application/pdf" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-4"/>
+            <p id="success-msg" class="text-green-400 font-semibold hidden">Signature Received! Processing PDF...</p>
+        </div>
+    </div>
+
+    <!-- VIEW 2: MOBILE SIGNING PAD -->
+    <div id="mobile-view" class="w-full max-w-md bg-gray-800 p-6 rounded-2xl shadow-xl text-center hidden">
+        <h1 class="text-xl font-bold mb-2">Draw Your Signature</h1>
+        <p class="text-gray-400 text-sm mb-4">Sign below with your finger and tap send.</p>
+        
+        <div class="border-2 border-dashed border-gray-600 rounded-xl bg-white mb-4 overflow-hidden">
+            <canvas id="sig-canvas" width="320" height="180" class="touch-none w-full cursor-crosshair"></canvas>
+        </div>
+        
+        <div class="flex gap-2">
+            <button id="clear-btn" class="w-1/2 bg-gray-700 hover:bg-gray-600 py-2 rounded-xl font-semibold">Clear</button>
+            <button id="send-btn" class="w-1/2 bg-blue-600 hover:bg-blue-700 py-2 rounded-xl font-semibold">Send to PC</button>
+        </div>
+        <p id="sent-status" class="text-green-400 text-sm mt-3 hidden">Signature sent successfully!</p>
+    </div>
+
+    <script>
+        // --- SECURITY: BLOCK INSPECT, RIGHT-CLICK & SHORTCUTS ---
+        document.addEventListener('contextmenu', e => e.preventDefault());
+
+        document.addEventListener('keydown', (e) => {
+            // Block F12
+            if (e.key === 'F12') {
+                e.preventDefault();
+            }
+            // Block Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+U
+            if (e.ctrlKey && e.shiftKey && ['I', 'J', 'C', 'i', 'j', 'c'].includes(e.key)) {
+                e.preventDefault();
+            }
+            if (e.ctrlKey && ['U', 'u', 'S', 's'].includes(e.key)) {
+                e.preventDefault();
+            }
+        });
+
+        // Debugger Trap to hinder inspection tools
+        setInterval(() => {
+            const before = new Date().getTime();
+            debugger;
+            const after = new Date().getTime();
+            if (after - before > 100) {
+                document.body.innerHTML = "<h1 style='color:red; text-align:center; margin-top:20vh;'>Security Violation Detected</h1>";
+            }
+        }, 1000);
+
+        // --- CORE APPLICATION LOGIC ---
+        const urlParams = new URLSearchParams(window.location.search);
+        const peerIdParam = urlParams.get('peer');
+
+        if (!peerIdParam) {
+            // --- PC HOST LOGIC ---
+            document.getElementById('host-view').classList.remove('hidden');
+            
+            const peer = new Peer();
+            let conn = null;
+
+            peer.on('open', (id) => {
+                const mobileUrl = window.location.origin + window.location.pathname + '?peer=' + id;
+                
+                new QRCode(document.getElementById("qrcode"), {
+                    text: mobileUrl,
+                    width: 180,
+                    height: 180
+                });
+                
+                document.getElementById('status').innerText = "Ready! Scan QR code with your phone.";
+            });
+
+            peer.on('connection', (connection) => {
+                conn = connection;
+                document.getElementById('status').innerText = "Phone Connected! Upload a PDF.";
+                document.getElementById('status').className = "text-green-400 text-sm font-medium";
+                document.getElementById('actions').classList.remove('hidden');
+
+                conn.on('data', async (signatureDataUrl) => {
+                    document.getElementById('success-msg').classList.remove('hidden');
+                    const fileInput = document.getElementById('pdf-upload').files[0];
+                    
+                    if (!fileInput) {
+                        alert("Signature received, but please upload a PDF file first!");
+                        return;
+                    }
+
+                    const arrayBuffer = await fileInput.arrayBuffer();
+                    const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
+                    
+                    const pngImageBytes = await fetch(signatureDataUrl).then(res => res.arrayBuffer());
+                    const pngImage = await pdfDoc.embedPng(pngImageBytes);
+                    
+                    const pages = pdfDoc.getPages();
+                    const firstPage = pages[0];
+                    
+                    firstPage.drawImage(pngImage, {
+                        x: 400,
+                        y: 50,
+                        width: 150,
+                        height: 75,
+                    });
+
+                    const pdfBytes = await pdfDoc.save();
+                    
+                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = 'signed-document.pdf';
+                    link.click();
+
+                    // Secure cleanup: clear memory references
+                    signatureDataUrl = null;
+                });
+            });
+
+        } else {
+            // --- MOBILE SIGNING PAD LOGIC ---
+            document.getElementById('mobile-view').classList.remove('hidden');
+
+            const canvas = document.getElementById('sig-canvas');
+            const ctx = canvas.getContext('2d');
+            let painting = false;
+
+            function startPosition(e) {
+                painting = true;
+                draw(e);
+            }
+            function endPosition() {
+                painting = false;
+                ctx.beginPath();
+            }
+            function draw(e) {
+                if (!painting) return;
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.strokeStyle = '#000000';
+
+                const rect = canvas.getBoundingClientRect();
+                const x = (e.clientX || e.touches[0].clientX) - rect.left;
+                const y = (e.clientY || e.touches[0].clientY) - rect.top;
+
+                ctx.lineTo(x, y);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+            }
+
+            canvas.addEventListener('mousedown', startPosition);
+            canvas.addEventListener('mouseup', endPosition);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('touchstart', startPosition);
+            canvas.addEventListener('touchend', endPosition);
+            canvas.addEventListener('touchmove', draw);
+
+            document.getElementById('clear-btn').addEventListener('click', () => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            });
+
+            const peer = new Peer();
+            peer.on('open', () => {
+                const conn = peer.connect(peerIdParam);
+                
+                document.getElementById('send-btn').addEventListener('click', () => {
+                    const dataUrl = canvas.toDataURL('image/png');
+                    conn.send(dataUrl);
+                    document.getElementById('sent-status').classList.remove('hidden');
+                });
+            });
+        }
+    </script>
+</body>
+</html>
