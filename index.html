@@ -3,35 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SignBeam - Instant PDF Signer</title>
+    <title>SignBeam - Instant Signature Pad</title>
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PeerJS for Free P2P Connection -->
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <!-- QRCode Generator -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <!-- PDF-Lib to modify PDFs -->
-    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 </head>
 <body class="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4 select-none">
 
     <!-- VIEW 1: PC HOST SCREEN -->
-    <div id="host-view" class="w-full max-w-xl bg-gray-800 p-6 rounded-2xl shadow-xl text-center">
-        <h1 class="text-2xl font-bold mb-2">SignBeam - PC Host</h1>
-        <p class="text-gray-400 text-sm mb-6">Step 1: Upload your PDF. Step 2: Scan the QR code with your phone.</p>
+    <div id="host-view" class="w-full max-w-xl bg-gray-800 p-6 rounded-2xl shadow-xl text-center hidden">
+        <h1 class="text-2xl font-bold mb-2">SignBeam - PC Receiver</h1>
+        <p class="text-gray-400 text-sm mb-6">Scan the QR code with your phone to draw and beam your signature.</p>
         
-        <!-- PDF Upload First -->
-        <div class="mb-6 text-left bg-gray-900 p-4 rounded-xl border border-gray-700">
-            <label class="block text-sm font-medium text-gray-300 mb-2">Select PDF Document to Sign:</label>
-            <input type="file" id="pdf-upload" accept="application/pdf" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"/>
-        </div>
-
-        <div id="qrcode-container" class="opacity-50 pointer-events-none transition-all duration-300">
-            <div id="qrcode" class="bg-white p-4 inline-block rounded-xl mb-4"></div>
-            <p id="status" class="text-yellow-400 text-sm font-medium">Please upload a PDF above to activate the signature scanner.</p>
-        </div>
+        <div id="qrcode" class="bg-white p-4 inline-block rounded-xl mb-4"></div>
+        <p id="status" class="text-yellow-400 text-sm font-medium">Initializing connection...</p>
         
-        <p id="success-msg" class="text-green-400 font-semibold mt-4 hidden">✓ Signature received! Signed PDF downloaded automatically.</p>
+        <!-- PREVIEW AREA (Shows up after signature is sent from mobile) -->
+        <div id="preview-section" class="mt-6 hidden bg-gray-900 p-4 rounded-xl border border-gray-700">
+            <h2 class="text-sm font-semibold text-gray-300 mb-2">Signature Preview:</h2>
+            <div class="bg-white p-2 rounded-lg inline-block mb-4">
+                <img id="sig-preview" src="" alt="Received Signature" class="max-h-32 object-contain mx-auto"/>
+            </div>
+            <div>
+                <a id="download-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-xl inline-block cursor-pointer transition-colors">Download / Save Signature</a>
+            </div>
+        </div>
     </div>
 
     <!-- VIEW 2: MOBILE SIGNING PAD -->
@@ -77,88 +76,35 @@
             // --- PC HOST LOGIC ---
             document.getElementById('host-view').classList.remove('hidden');
             
-            let peer = null;
-            let conn = null;
-            let qrGenerated = false;
-
-            const pdfInput = document.getElementById('pdf-upload');
-            const qrContainer = document.getElementById('qrcode-container');
+            const peer = new Peer();
             const statusText = document.getElementById('status');
 
-            pdfInput.addEventListener('change', (e) => {
-                if (e.target.files.length > 0) {
-                    // Enable QR code area once PDF is selected
-                    qrContainer.classList.remove('opacity-50', 'pointer-events-none');
+            peer.on('open', (id) => {
+                const mobileUrl = window.location.origin + window.location.pathname + '?peer=' + id;
+                new QRCode(document.getElementById("qrcode"), {
+                    text: mobileUrl,
+                    width: 180,
+                    height: 180
+                });
+                statusText.innerText = "Ready! Scan QR code with your phone.";
+                statusText.className = "text-green-400 text-sm font-medium";
+            });
+
+            peer.on('connection', (connection) => {
+                statusText.innerText = "Phone Connected! Draw signature on mobile.";
+
+                connection.on('data', (signatureDataUrl) => {
+                    statusText.innerText = "Signature Received Successfully!";
                     
-                    if (!peer) {
-                        peer = new Peer();
-                        
-                        peer.on('open', (id) => {
-                            if (!qrGenerated) {
-                                const mobileUrl = window.location.origin + window.location.pathname + '?peer=' + id;
-                                new QRCode(document.getElementById("qrcode"), {
-                                    text: mobileUrl,
-                                    width: 180,
-                                    height: 180
-                                });
-                                qrGenerated = true;
-                            }
-                            statusText.innerText = "PDF Loaded! Ready. Scan QR code with your phone.";
-                            statusText.className = "text-green-400 text-sm font-medium";
-                        });
+                    // Show preview
+                    document.getElementById('sig-preview').src = signatureDataUrl;
+                    document.getElementById('preview-section').classList.remove('hidden');
 
-                        peer.on('connection', (connection) => {
-                            conn = connection;
-                            statusText.innerText = "Phone Connected! Waiting for signature...";
-
-                            conn.on('data', async (signatureDataUrl) => {
-                                document.getElementById('success-msg').classList.remove('hidden');
-                                statusText.innerText = "Processing Document...";
-
-                                const fileInput = document.getElementById('pdf-upload').files[0];
-                                if (!fileInput) {
-                                    alert("Please select a PDF file first.");
-                                    return;
-                                }
-
-                                try {
-                                    const arrayBuffer = await fileInput.arrayBuffer();
-                                    const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
-                                    
-                                    const pngImageBytes = await fetch(signatureDataUrl).then(res => res.arrayBuffer());
-                                    const pngImage = await pdfDoc.embedPng(pngImageBytes);
-                                    
-                                    const pages = pdfDoc.getPages();
-                                    const firstPage = pages[0];
-                                    
-                                    // Draw signature at bottom-right of first page
-                                    firstPage.drawImage(pngImage, {
-                                        x: 400,
-                                        y: 50,
-                                        width: 150,
-                                        height: 75,
-                                    });
-
-                                    const pdfBytes = await pdfDoc.save();
-                                    
-                                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-                                    const link = document.createElement('a');
-                                    link.href = URL.createObjectURL(blob);
-                                    link.download = 'signed-document.pdf';
-                                    link.click();
-
-                                    statusText.innerText = "Done! Signed PDF downloaded.";
-                                } catch (err) {
-                                    console.error(err);
-                                    alert("Error processing PDF. Please try a valid PDF file.");
-                                }
-
-                                // Secure memory cleanup
-                                signatureDataUrl = null;
-                            });
-                        });
-                    }
-                }
+                    // Setup download button
+                    const downloadBtn = document.getElementById('download-btn');
+                    downloadBtn.href = signatureDataUrl;
+                    downloadBtn.download = 'signature.png';
+                });
             });
 
         } else {
