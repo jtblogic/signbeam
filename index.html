@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instant Web Signer ($0 Cost)</title>
+    <title>SignBeam - Instant PDF Signer</title>
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PeerJS for Free P2P Connection -->
@@ -17,32 +17,37 @@
 
     <!-- VIEW 1: PC HOST SCREEN -->
     <div id="host-view" class="w-full max-w-xl bg-gray-800 p-6 rounded-2xl shadow-xl text-center">
-        <h1 class="text-2xl font-bold mb-2">PC PDF Signer</h1>
-        <p class="text-gray-400 text-sm mb-6">Scan the QR code with your phone to open your mobile signing pad.</p>
+        <h1 class="text-2xl font-bold mb-2">SignBeam - PC Host</h1>
+        <p class="text-gray-400 text-sm mb-6">Step 1: Upload your PDF. Step 2: Scan the QR code with your phone.</p>
         
-        <div id="qrcode" class="bg-white p-4 inline-block rounded-xl mb-4"></div>
-        <p id="status" class="text-yellow-400 text-sm font-medium">Initializing connection...</p>
-        
-        <div id="actions" class="mt-6 hidden">
-            <input type="file" id="pdf-upload" accept="application/pdf" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-4"/>
-            <p id="success-msg" class="text-green-400 font-semibold hidden">Signature Received! Processing PDF...</p>
+        <!-- PDF Upload First -->
+        <div class="mb-6 text-left bg-gray-900 p-4 rounded-xl border border-gray-700">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Select PDF Document to Sign:</label>
+            <input type="file" id="pdf-upload" accept="application/pdf" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"/>
         </div>
+
+        <div id="qrcode-container" class="opacity-50 pointer-events-none transition-all duration-300">
+            <div id="qrcode" class="bg-white p-4 inline-block rounded-xl mb-4"></div>
+            <p id="status" class="text-yellow-400 text-sm font-medium">Please upload a PDF above to activate the signature scanner.</p>
+        </div>
+        
+        <p id="success-msg" class="text-green-400 font-semibold mt-4 hidden">✓ Signature received! Signed PDF downloaded automatically.</p>
     </div>
 
     <!-- VIEW 2: MOBILE SIGNING PAD -->
     <div id="mobile-view" class="w-full max-w-md bg-gray-800 p-6 rounded-2xl shadow-xl text-center hidden">
-        <h1 class="text-xl font-bold mb-2">Draw Your Signature</h1>
+        <h1 class="text-xl font-bold mb-2">SignBeam Mobile Pad</h1>
         <p class="text-gray-400 text-sm mb-4">Sign below with your finger and tap send.</p>
         
-        <div class="border-2 border-dashed border-gray-600 rounded-xl bg-white mb-4 overflow-hidden">
+        <div class="border-2 border-dashed border-gray-600 rounded-xl bg-white mb-4 overflow-hidden shadow-inner">
             <canvas id="sig-canvas" width="320" height="180" class="touch-none w-full cursor-crosshair"></canvas>
         </div>
         
         <div class="flex gap-2">
-            <button id="clear-btn" class="w-1/2 bg-gray-700 hover:bg-gray-600 py-2 rounded-xl font-semibold">Clear</button>
-            <button id="send-btn" class="w-1/2 bg-blue-600 hover:bg-blue-700 py-2 rounded-xl font-semibold">Send to PC</button>
+            <button id="clear-btn" class="w-1/2 bg-gray-700 hover:bg-gray-600 py-2 rounded-xl font-semibold transition-colors">Clear</button>
+            <button id="send-btn" class="w-1/2 bg-blue-600 hover:bg-blue-700 py-2 rounded-xl font-semibold transition-colors">Send to PC</button>
         </div>
-        <p id="sent-status" class="text-green-400 text-sm mt-3 hidden">Signature sent successfully!</p>
+        <p id="sent-status" class="text-green-400 text-sm mt-3 hidden">✓ Signature sent successfully!</p>
     </div>
 
     <script>
@@ -50,20 +55,11 @@
         document.addEventListener('contextmenu', e => e.preventDefault());
 
         document.addEventListener('keydown', (e) => {
-            // Block F12
-            if (e.key === 'F12') {
-                e.preventDefault();
-            }
-            // Block Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+U
-            if (e.ctrlKey && e.shiftKey && ['I', 'J', 'C', 'i', 'j', 'c'].includes(e.key)) {
-                e.preventDefault();
-            }
-            if (e.ctrlKey && ['U', 'u', 'S', 's'].includes(e.key)) {
-                e.preventDefault();
-            }
+            if (e.key === 'F12') e.preventDefault();
+            if (e.ctrlKey && e.shiftKey && ['I', 'J', 'C', 'i', 'j', 'c'].includes(e.key)) e.preventDefault();
+            if (e.ctrlKey && ['U', 'u', 'S', 's'].includes(e.key)) e.preventDefault();
         });
 
-        // Debugger Trap to hinder inspection tools
         setInterval(() => {
             const before = new Date().getTime();
             debugger;
@@ -81,63 +77,88 @@
             // --- PC HOST LOGIC ---
             document.getElementById('host-view').classList.remove('hidden');
             
-            const peer = new Peer();
+            let peer = null;
             let conn = null;
+            let qrGenerated = false;
 
-            peer.on('open', (id) => {
-                const mobileUrl = window.location.origin + window.location.pathname + '?peer=' + id;
-                
-                new QRCode(document.getElementById("qrcode"), {
-                    text: mobileUrl,
-                    width: 180,
-                    height: 180
-                });
-                
-                document.getElementById('status').innerText = "Ready! Scan QR code with your phone.";
-            });
+            const pdfInput = document.getElementById('pdf-upload');
+            const qrContainer = document.getElementById('qrcode-container');
+            const statusText = document.getElementById('status');
 
-            peer.on('connection', (connection) => {
-                conn = connection;
-                document.getElementById('status').innerText = "Phone Connected! Upload a PDF.";
-                document.getElementById('status').className = "text-green-400 text-sm font-medium";
-                document.getElementById('actions').classList.remove('hidden');
-
-                conn.on('data', async (signatureDataUrl) => {
-                    document.getElementById('success-msg').classList.remove('hidden');
-                    const fileInput = document.getElementById('pdf-upload').files[0];
+            pdfInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    // Enable QR code area once PDF is selected
+                    qrContainer.classList.remove('opacity-50', 'pointer-events-none');
                     
-                    if (!fileInput) {
-                        alert("Signature received, but please upload a PDF file first!");
-                        return;
+                    if (!peer) {
+                        peer = new Peer();
+                        
+                        peer.on('open', (id) => {
+                            if (!qrGenerated) {
+                                const mobileUrl = window.location.origin + window.location.pathname + '?peer=' + id;
+                                new QRCode(document.getElementById("qrcode"), {
+                                    text: mobileUrl,
+                                    width: 180,
+                                    height: 180
+                                });
+                                qrGenerated = true;
+                            }
+                            statusText.innerText = "PDF Loaded! Ready. Scan QR code with your phone.";
+                            statusText.className = "text-green-400 text-sm font-medium";
+                        });
+
+                        peer.on('connection', (connection) => {
+                            conn = connection;
+                            statusText.innerText = "Phone Connected! Waiting for signature...";
+
+                            conn.on('data', async (signatureDataUrl) => {
+                                document.getElementById('success-msg').classList.remove('hidden');
+                                statusText.innerText = "Processing Document...";
+
+                                const fileInput = document.getElementById('pdf-upload').files[0];
+                                if (!fileInput) {
+                                    alert("Please select a PDF file first.");
+                                    return;
+                                }
+
+                                try {
+                                    const arrayBuffer = await fileInput.arrayBuffer();
+                                    const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
+                                    
+                                    const pngImageBytes = await fetch(signatureDataUrl).then(res => res.arrayBuffer());
+                                    const pngImage = await pdfDoc.embedPng(pngImageBytes);
+                                    
+                                    const pages = pdfDoc.getPages();
+                                    const firstPage = pages[0];
+                                    
+                                    // Draw signature at bottom-right of first page
+                                    firstPage.drawImage(pngImage, {
+                                        x: 400,
+                                        y: 50,
+                                        width: 150,
+                                        height: 75,
+                                    });
+
+                                    const pdfBytes = await pdfDoc.save();
+                                    
+                                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                                    const link = document.createElement('a');
+                                    link.href = URL.createObjectURL(blob);
+                                    link.download = 'signed-document.pdf';
+                                    link.click();
+
+                                    statusText.innerText = "Done! Signed PDF downloaded.";
+                                } catch (err) {
+                                    console.error(err);
+                                    alert("Error processing PDF. Please try a valid PDF file.");
+                                }
+
+                                // Secure memory cleanup
+                                signatureDataUrl = null;
+                            });
+                        });
                     }
-
-                    const arrayBuffer = await fileInput.arrayBuffer();
-                    const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
-                    
-                    const pngImageBytes = await fetch(signatureDataUrl).then(res => res.arrayBuffer());
-                    const pngImage = await pdfDoc.embedPng(pngImageBytes);
-                    
-                    const pages = pdfDoc.getPages();
-                    const firstPage = pages[0];
-                    
-                    firstPage.drawImage(pngImage, {
-                        x: 400,
-                        y: 50,
-                        width: 150,
-                        height: 75,
-                    });
-
-                    const pdfBytes = await pdfDoc.save();
-                    
-                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-                    const link = document.createElement('a');
-                    link.href = URL.createObjectURL(blob);
-                    link.download = 'signed-document.pdf';
-                    link.click();
-
-                    // Secure cleanup: clear memory references
-                    signatureDataUrl = null;
-                });
+                }
             });
 
         } else {
@@ -191,6 +212,8 @@
                     const dataUrl = canvas.toDataURL('image/png');
                     conn.send(dataUrl);
                     document.getElementById('sent-status').classList.remove('hidden');
+                    document.getElementById('send-btn').innerText = "Sent!";
+                    document.getElementById('send-btn').disabled = true;
                 });
             });
         }
